@@ -9,21 +9,9 @@ This package contains the hybrid search engine components:
 - Reranking
 """
 
-from src.core.query_engine.query_processor import (
-    QueryProcessor,
-    QueryProcessorConfig,
-    create_query_processor,
-    DEFAULT_STOPWORDS,
-    CHINESE_STOPWORDS,
-    ENGLISH_STOPWORDS,
-)
 from src.core.query_engine.dense_retriever import (
     DenseRetriever,
     create_dense_retriever,
-)
-from src.core.query_engine.sparse_retriever import (
-    SparseRetriever,
-    create_sparse_retriever,
 )
 from src.core.query_engine.fusion import (
     RRFFusion,
@@ -34,6 +22,22 @@ from src.core.query_engine.hybrid_search import (
     HybridSearchConfig,
     HybridSearchResult,
     create_hybrid_search,
+)
+from src.core.query_engine.query_processor import (
+    CHINESE_STOPWORDS,
+    DEFAULT_STOPWORDS,
+    ENGLISH_STOPWORDS,
+    QueryProcessor,
+    QueryProcessorConfig,
+    create_query_processor,
+)
+from src.core.query_engine.runtime import (
+    QueryRuntime,
+    create_query_runtime,
+)
+from src.core.query_engine.sparse_retriever import (
+    SparseRetriever,
+    create_sparse_retriever,
 )
 
 __all__ = [
@@ -53,4 +57,6 @@ __all__ = [
     "HybridSearchConfig",
     "HybridSearchResult",
     "create_hybrid_search",
+    "QueryRuntime",
+    "create_query_runtime",
 ]

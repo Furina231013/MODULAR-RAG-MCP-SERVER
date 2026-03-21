@@ -23,9 +23,9 @@ Exit codes:
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-# Ensure project root is on sys.path
+# Ensure project root is on sys.path before importing from src.
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_REPO_ROOT))
@@ -33,24 +33,14 @@ sys.path.insert(0, str(_REPO_ROOT))
 # Set UTF-8 encoding for Windows console
 if sys.platform == "win32":
     import io
+
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-# Ensure project root is in path for imports
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-from src.core.settings import load_settings
-from src.core.query_engine.query_processor import QueryProcessor
-from src.core.query_engine.hybrid_search import create_hybrid_search
-from src.core.query_engine.dense_retriever import create_dense_retriever
-from src.core.query_engine.sparse_retriever import create_sparse_retriever
-from src.core.query_engine.reranker import create_core_reranker
-from src.core.trace import TraceContext, TraceCollector
-from src.ingestion.storage.bm25_indexer import BM25Indexer
-from src.libs.embedding.embedding_factory import EmbeddingFactory
-from src.libs.vector_store.vector_store_factory import VectorStoreFactory
-from src.observability.logger import get_logger
+from src.core.query_engine.runtime import create_query_runtime  # noqa: E402
+from src.core.settings import load_settings  # noqa: E402
+from src.core.trace import TraceCollector, TraceContext  # noqa: E402
+from src.observability.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -63,53 +53,40 @@ def parse_args() -> argparse.Namespace:
         epilog=__doc__,
     )
 
-    parser.add_argument(
-        "--query", "-q",
-        required=True,
-        help="Query string."
-    )
+    parser.add_argument("--query", "-q", required=True, help="Query string.")
 
     parser.add_argument(
-        "--collection", "-c",
-        default="default",
-        help="Collection name (default: 'default')"
+        "--collection", "-c", default="default", help="Collection name (default: 'default')"
     )
 
-    parser.add_argument(
-        "--top-k",
-        type=int,
-        default=10,
-        help="Max number of results (default: 10)"
-    )
+    parser.add_argument("--top-k", type=int, default=10, help="Max number of results (default: 10)")
 
     parser.add_argument(
         "--config",
         default=str(_REPO_ROOT / "config" / "settings.yaml"),
-        help="Path to configuration file (default: config/settings.yaml)"
+        help="Path to configuration file (default: config/settings.yaml)",
     )
 
     parser.add_argument(
-        "--no-rerank",
-        action="store_true",
-        help="Disable reranking even if enabled in settings"
+        "--no-rerank", action="store_true", help="Disable reranking even if enabled in settings"
     )
 
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print intermediate results (dense/sparse/fusion/rerank)"
+        help="Print intermediate results (dense/sparse/fusion/rerank)",
     )
 
     return parser.parse_args()
 
 
-def _format_filters(filters: Dict[str, Any]) -> str:
+def _format_filters(filters: dict[str, Any]) -> str:
     if not filters:
         return "(none)"
     return ", ".join(f"{k}={v}" for k, v in filters.items())
 
 
-def _print_results(results: List[Any], top_k: int, title: str = "RESULTS") -> None:
+def _print_results(results: list[Any], top_k: int, title: str = "RESULTS") -> None:
     print("\n" + "=" * 60)
     print(f"{title} (top_k={top_k}, returned={len(results)})")
     print("=" * 60)
@@ -133,45 +110,15 @@ def _print_results(results: List[Any], top_k: int, title: str = "RESULTS") -> No
 
 
 def _build_components(settings, collection: str):
-    vector_store = VectorStoreFactory.create(
-        settings,
-        collection_name=collection,
-    )
-
-    embedding_client = EmbeddingFactory.create(settings)
-    dense_retriever = create_dense_retriever(
-        settings=settings,
-        embedding_client=embedding_client,
-        vector_store=vector_store,
-    )
-
-    bm25_indexer = BM25Indexer(index_dir=f"data/db/bm25/{collection}")
-    sparse_retriever = create_sparse_retriever(
-        settings=settings,
-        bm25_indexer=bm25_indexer,
-        vector_store=vector_store,
-    )
-    # Ensure sparse retriever queries the correct collection index
-    sparse_retriever.default_collection = collection
-
-    query_processor = QueryProcessor()
-    hybrid_search = create_hybrid_search(
-        settings=settings,
-        query_processor=query_processor,
-        dense_retriever=dense_retriever,
-        sparse_retriever=sparse_retriever,
-    )
-
-    reranker = create_core_reranker(settings=settings)
-
-    return hybrid_search, reranker
+    runtime = create_query_runtime(settings, collection=collection)
+    return runtime.hybrid_search, runtime.reranker
 
 
 def _run_query(
     hybrid_search,
     reranker,
     query: str,
-    top_k: Optional[int],
+    top_k: int | None,
     use_rerank: bool,
     verbose: bool,
 ) -> int:
@@ -217,8 +164,10 @@ def _run_query(
         print("[INFO] 未找到相关文档，请先运行 ingest.py 摄取数据。")
         return 0
 
+    rerank_enabled = use_rerank and reranker is not None and reranker.is_enabled
+
     # Optional reranking
-    if use_rerank and reranker.is_enabled:
+    if rerank_enabled:
         try:
             rerank_result = reranker.rerank(query=query, results=results, top_k=top_k, trace=trace)
             results = rerank_result.results
@@ -231,7 +180,7 @@ def _run_query(
                 _print_results(results, top_k=top_k, title="RERANK RESULTS")
         except Exception as e:
             print(f"[WARN] Reranking failed: {e}. Using original order.")
-    elif verbose and not reranker.is_enabled:
+    elif verbose and use_rerank and not rerank_enabled:
         print("[INFO] Reranking disabled by settings.")
 
     _print_results(results, top_k=effective_top_k)

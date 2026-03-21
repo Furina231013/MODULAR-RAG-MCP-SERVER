@@ -13,14 +13,14 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import streamlit as st
 
 logger = logging.getLogger(__name__)
 
 # Default golden test set location
-DEFAULT_GOLDEN_SET = Path("tests/fixtures/golden_test_set.json")
+DEFAULT_GOLDEN_SET = Path("tests/fixtures/golden_test_set_demo.json")
 # Evaluation results history file
 EVAL_HISTORY_PATH = Path("logs/eval_history.jsonl")
 
@@ -43,19 +43,23 @@ def render() -> None:
         backend = st.selectbox(
             "Evaluator Backend",
             options=["custom", "ragas", "composite"],
-            index=0,
+            index=2,
             key="eval_backend",
             help="Select which evaluator backend to use.",
         )
 
     # Show info/warning based on selected backend
-    if backend in ("custom", "composite"):
+    if backend == "custom":
         st.info(
-            "ℹ️ **Custom Evaluator** 尚未完成数据集准备，当前仅为预留接口。"
-            "Custom Evaluator 需要在 Golden Test Set 中填写 `expected_chunk_ids` "
-            "作为 ground truth 才能计算 hit_rate / MRR 指标。"
-            "目前建议使用 **ragas** 后端进行评估。",
-            icon="🚧",
+            "ℹ️ Custom Evaluator 会读取 Golden Test Set 中的 `expected_chunk_ids`，"
+            "用于计算 hit_rate / MRR 这类检索指标。",
+            icon="📎",
+        )
+    elif backend == "composite":
+        st.success(
+            "✅ 推荐使用 Composite：同时计算 `hit_rate / mrr` 和 "
+            "`faithfulness / answer_relevancy / context_precision`。",
+            icon="🧪",
         )
 
     with col2:
@@ -76,6 +80,20 @@ def render() -> None:
             help="Limit retrieval to a specific collection.",
         )
 
+    answer_source = "manual"
+    if backend in ("ragas", "composite"):
+        answer_source = st.selectbox(
+            "Answer Source",
+            options=["manual", "auto_ask", "hybrid"],
+            index=2,
+            key="eval_answer_source",
+            help=(
+                "manual: use only the answers entered below; "
+                "auto_ask: generate answers through the local ask flow; "
+                "hybrid: prefer manual answers and fall back to auto ask."
+            ),
+        )
+
     # Golden test set file selection
     golden_path_str = st.text_input(
         "Golden Test Set Path",
@@ -90,12 +108,16 @@ def render() -> None:
         st.warning(
             f"⚠️ **Golden test set not found:** `{golden_path}`. "
             "Create a JSON file with test queries and expected results. "
-            "See `tests/fixtures/golden_test_set.json` for the format."
+            "See `tests/fixtures/golden_test_set_demo.json` for the format."
         )
 
     # ── Answer Input Section (for Ragas) ───────────────────────────
-    user_answers: Dict[int, str] = {}
-    if backend == "ragas" and golden_path.exists():
+    user_answers: dict[int, str] = {}
+    if (
+        backend in ("ragas", "composite")
+        and golden_path.exists()
+        and answer_source in ("manual", "hybrid")
+    ):
         st.divider()
         st.subheader("✏️ Provide Answers (回答输入)")
         st.caption(
@@ -128,12 +150,18 @@ def render() -> None:
             # Show fill status
             filled = len(user_answers)
             total = len(_test_cases)
-            if filled < total:
-                st.warning(f"⚠️ 已填写 {filled}/{total} 个回答。未填写的用例将使用检索片段拼接作为回答（评估结果可能不准确）。")
+            if answer_source == "manual" and filled < total:
+                st.warning(
+                    f"⚠️ 已填写 {filled}/{total} 个回答。未填写的用例将退化为检索片段拼接回答，评估结果可能不准确。"
+                )
+            elif answer_source == "hybrid" and filled < total:
+                st.info(f"ℹ️ 已填写 {filled}/{total} 个回答。未填写的用例会走自动 ask 生成。")
             else:
                 st.success(f"✅ 所有 {total} 个回答已填写。")
         except Exception as exc:
             st.warning(f"无法加载测试用例预览: {exc}")
+    elif backend in ("ragas", "composite") and golden_path.exists() and answer_source == "auto_ask":
+        st.info("ℹ️ 当前将通过自动 ask 流程为每个测试用例生成 answer，然后再跑评测。")
 
     # ── Run Evaluation ─────────────────────────────────────────────
     st.divider()
@@ -152,6 +180,7 @@ def render() -> None:
             top_k=int(top_k),
             collection=collection.strip() or None,
             user_answers=user_answers if user_answers else None,
+            answer_source=answer_source,
         )
 
     # ── Historical Results ─────────────────────────────────────────
@@ -163,8 +192,9 @@ def _run_evaluation(
     backend: str,
     golden_path: Path,
     top_k: int,
-    collection: Optional[str],
-    user_answers: Optional[Dict[int, str]] = None,
+    collection: str | None,
+    user_answers: dict[int, str] | None = None,
+    answer_source: str = "manual",
 ) -> None:
     """Execute an evaluation run and display results.
 
@@ -180,6 +210,7 @@ def _run_evaluation(
                 top_k=top_k,
                 collection=collection,
                 user_answers=user_answers,
+                answer_source=answer_source,
             )
         except Exception as exc:
             st.error(f"❌ Evaluation failed: {exc}")
@@ -200,9 +231,10 @@ def _execute_evaluation(
     backend: str,
     golden_path: Path,
     top_k: int,
-    collection: Optional[str],
-    user_answers: Optional[Dict[int, str]] = None,
-) -> Dict[str, Any]:
+    collection: str | None,
+    user_answers: dict[int, str] | None = None,
+    answer_source: str = "manual",
+) -> dict[str, Any]:
     """Run the evaluation pipeline and return the report dict.
 
     This function imports heavy dependencies lazily to keep the
@@ -210,9 +242,11 @@ def _execute_evaluation(
     """
     from dataclasses import replace as dc_replace
 
+    from src.core.answer import AskService
+    from src.core.query_engine.runtime import create_query_runtime
     from src.core.settings import load_settings
     from src.libs.evaluator.evaluator_factory import EvaluatorFactory
-    from src.observability.evaluation.eval_runner import EvalRunner, load_test_set
+    from src.observability.evaluation.eval_runner import EvalRunner
 
     settings = load_settings()
 
@@ -223,25 +257,26 @@ def _execute_evaluation(
         enabled=True,
         provider=backend,
         metrics=eval_settings.metrics if hasattr(eval_settings, "metrics") else [],
+        backends=getattr(eval_settings, "backends", None),
     )
     # Replace only the evaluation sub-config in the full settings
     settings_with_override = dc_replace(settings, evaluation=overridden_eval)
 
     evaluator = EvaluatorFactory.create(settings_with_override)
 
-    # Try to create HybridSearch (optional – works without if not configured)
     target_collection = collection or "default"
-    hybrid_search = _try_create_hybrid_search(settings, target_collection)
-
-    # Create reranker if enabled
+    hybrid_search = None
     reranker = None
     try:
-        from src.core.query_engine.reranker import create_core_reranker
-        reranker = create_core_reranker(settings=settings)
-        if not reranker.is_enabled:
-            reranker = None
+        runtime = create_query_runtime(settings, collection=target_collection)
+        hybrid_search = runtime.hybrid_search
+        reranker = runtime.reranker
     except Exception as exc:
-        logger.warning("Could not create reranker: %s", exc)
+        logger.warning("Could not create query runtime: %s", exc)
+
+    answer_generator = None
+    if answer_source in ("auto_ask", "hybrid"):
+        answer_generator = AskService(settings=settings).generate_answer
 
     # Build answer_override map: index → user-provided answer text
     # EvalRunner will use these instead of auto-generating from chunks.
@@ -249,6 +284,7 @@ def _execute_evaluation(
         settings=settings,
         hybrid_search=hybrid_search,
         evaluator=evaluator,
+        answer_generator=answer_generator,
         answer_overrides=user_answers,
         reranker=reranker,
     )
@@ -262,51 +298,7 @@ def _execute_evaluation(
     return report.to_dict()
 
 
-def _try_create_hybrid_search(settings: Any, collection: str = "default") -> Any:
-    """Attempt to create a HybridSearch instance.
-
-    Returns None if required dependencies are not available
-    (e.g., no indexed data).
-    """
-    try:
-        from src.core.query_engine.query_processor import QueryProcessor
-        from src.core.query_engine.hybrid_search import create_hybrid_search
-        from src.core.query_engine.dense_retriever import create_dense_retriever
-        from src.core.query_engine.sparse_retriever import create_sparse_retriever
-        from src.ingestion.storage.bm25_indexer import BM25Indexer
-        from src.libs.embedding.embedding_factory import EmbeddingFactory
-        from src.libs.vector_store.vector_store_factory import VectorStoreFactory
-
-        vector_store = VectorStoreFactory.create(
-            settings, collection_name=collection,
-        )
-        embedding_client = EmbeddingFactory.create(settings)
-        dense_retriever = create_dense_retriever(
-            settings=settings,
-            embedding_client=embedding_client,
-            vector_store=vector_store,
-        )
-        bm25_indexer = BM25Indexer(index_dir=f"data/db/bm25/{collection}")
-        sparse_retriever = create_sparse_retriever(
-            settings=settings,
-            bm25_indexer=bm25_indexer,
-            vector_store=vector_store,
-        )
-        sparse_retriever.default_collection = collection
-
-        query_processor = QueryProcessor()
-        return create_hybrid_search(
-            settings=settings,
-            query_processor=query_processor,
-            dense_retriever=dense_retriever,
-            sparse_retriever=sparse_retriever,
-        )
-    except Exception as exc:
-        logger.warning("Could not create HybridSearch: %s", exc)
-        return None
-
-
-def _render_aggregate_metrics(report: Dict[str, Any]) -> None:
+def _render_aggregate_metrics(report: dict[str, Any]) -> None:
     """Display aggregate metrics as metric cards."""
     st.subheader("📊 Aggregate Metrics")
 
@@ -331,7 +323,7 @@ def _render_aggregate_metrics(report: Dict[str, Any]) -> None:
     )
 
 
-def _render_query_details(report: Dict[str, Any]) -> None:
+def _render_query_details(report: dict[str, Any]) -> None:
     """Display per-query evaluation results in an expandable table."""
     st.subheader("🔍 Per-Query Details")
 
@@ -346,9 +338,7 @@ def _render_query_details(report: Dict[str, Any]) -> None:
         metrics = qr.get("metrics", {})
 
         # Build metric summary for the expander label
-        metric_summary = " · ".join(
-            f"{k}: {v:.3f}" for k, v in sorted(metrics.items())
-        )
+        metric_summary = " · ".join(f"{k}: {v:.3f}" for k, v in sorted(metrics.items()))
         if not metric_summary:
             metric_summary = "no metrics"
 
@@ -384,7 +374,7 @@ def _render_history() -> None:
     if not history:
         st.info(
             "**No evaluation history yet.** "
-            "Configure the evaluator above and click \"Run Evaluation\" to start. "
+            'Configure the evaluator above and click "Run Evaluation" to start. '
             "Results will be saved here for comparison across runs."
         )
         return
@@ -398,17 +388,14 @@ def _render_history() -> None:
                 "Evaluator": entry.get("evaluator_name", "—"),
                 "Queries": entry.get("query_count", 0),
                 "Time (ms)": round(entry.get("total_elapsed_ms", 0)),
-                **{
-                    k: round(v, 4)
-                    for k, v in entry.get("aggregate_metrics", {}).items()
-                },
+                **{k: round(v, 4) for k, v in entry.get("aggregate_metrics", {}).items()},
             }
         )
 
     st.dataframe(rows, use_container_width=True)
 
 
-def _save_to_history(report: Dict[str, Any]) -> None:
+def _save_to_history(report: dict[str, Any]) -> None:
     """Append an evaluation report to the history file."""
     try:
         EVAL_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -422,12 +409,12 @@ def _save_to_history(report: Dict[str, Any]) -> None:
         logger.warning("Failed to save evaluation history: %s", exc)
 
 
-def _load_history() -> List[Dict[str, Any]]:
+def _load_history() -> list[dict[str, Any]]:
     """Load evaluation history from JSONL file."""
     if not EVAL_HISTORY_PATH.exists():
         return []
 
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     try:
         with EVAL_HISTORY_PATH.open("r", encoding="utf-8") as f:
             for line in f:
@@ -443,7 +430,7 @@ def _load_history() -> List[Dict[str, Any]]:
     return entries
 
 
-def _load_golden_queries(golden_path: Path) -> List[Dict[str, Any]]:
+def _load_golden_queries(golden_path: Path) -> list[dict[str, Any]]:
     """Load test cases from golden test set for display in the UI.
 
     Returns list of dicts with at least 'query' and optionally

@@ -14,7 +14,8 @@ Design Principles:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from src.libs.evaluator.base_evaluator import BaseEvaluator
 
@@ -26,6 +27,14 @@ ANSWER_RELEVANCY = "answer_relevancy"
 CONTEXT_PRECISION = "context_precision"
 
 SUPPORTED_METRICS = {FAITHFULNESS, ANSWER_RELEVANCY, CONTEXT_PRECISION}
+
+
+def _optional_str(value: Any) -> str | None:
+    """Return a stripped string value, or None for non-strings/blank strings."""
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return None
 
 
 def _import_ragas() -> None:
@@ -64,7 +73,7 @@ class RagasEvaluator(BaseEvaluator):
     def __init__(
         self,
         settings: Any = None,
-        metrics: Optional[Sequence[str]] = None,
+        metrics: Sequence[str] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize RagasEvaluator.
@@ -104,12 +113,12 @@ class RagasEvaluator(BaseEvaluator):
     def evaluate(
         self,
         query: str,
-        retrieved_chunks: List[Any],
-        generated_answer: Optional[str] = None,
-        ground_truth: Optional[Any] = None,
-        trace: Optional[Any] = None,
+        retrieved_chunks: list[Any],
+        generated_answer: str | None = None,
+        ground_truth: Any | None = None,
+        trace: Any | None = None,
         **kwargs: Any,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Evaluate RAG quality using Ragas LLM-as-Judge metrics.
 
         Args:
@@ -150,9 +159,9 @@ class RagasEvaluator(BaseEvaluator):
     def _run_ragas(
         self,
         query: str,
-        contexts: List[str],
+        contexts: list[str],
         answer: str,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Execute Ragas collections metrics and return normalised scores.
 
         Ragas 0.4+ collections metrics use per-metric ``score()`` instead of
@@ -161,21 +170,23 @@ class RagasEvaluator(BaseEvaluator):
         - AnswerRelevancy: (user_input, response)
         """
         from ragas.metrics.collections import (
-            Faithfulness,
             AnswerRelevancy,
             ContextPrecisionWithoutReference,
+            Faithfulness,
         )
 
         # Build LLM / Embedding wrappers from settings
         llm, embeddings = self._build_wrappers()
 
-        scores: Dict[str, float] = {}
+        scores: dict[str, float] = {}
 
         for metric_name in self._metric_names:
             if metric_name == FAITHFULNESS:
                 m = Faithfulness(llm=llm)
                 result = m.score(
-                    user_input=query, response=answer, retrieved_contexts=contexts,
+                    user_input=query,
+                    response=answer,
+                    retrieved_contexts=contexts,
                 )
             elif metric_name == ANSWER_RELEVANCY:
                 m = AnswerRelevancy(llm=llm, embeddings=embeddings)
@@ -183,7 +194,9 @@ class RagasEvaluator(BaseEvaluator):
             elif metric_name == CONTEXT_PRECISION:
                 m = ContextPrecisionWithoutReference(llm=llm)
                 result = m.score(
-                    user_input=query, response=answer, retrieved_contexts=contexts,
+                    user_input=query,
+                    response=answer,
+                    retrieved_contexts=contexts,
                 )
             else:
                 continue
@@ -201,9 +214,11 @@ class RagasEvaluator(BaseEvaluator):
         Returns:
             Tuple of (llm_wrapper, embeddings_wrapper).
         """
+        import instructor
         from openai import AsyncAzureOpenAI, AsyncOpenAI
-        from ragas.llms import llm_factory
         from ragas.embeddings import OpenAIEmbeddings
+        from ragas.llms import llm_factory
+        from ragas.llms.base import InstructorLLM
 
         if self.settings is None:
             raise ValueError("Settings required to create LLM for Ragas evaluation")
@@ -211,14 +226,12 @@ class RagasEvaluator(BaseEvaluator):
         # ── LLM ──
         llm_cfg = self.settings.llm
         provider = llm_cfg.provider.lower()
-        llm_azure_endpoint = getattr(llm_cfg, "azure_endpoint", None)
+        llm_azure_endpoint = _optional_str(getattr(llm_cfg, "azure_endpoint", None))
+        llm_base_url = _optional_str(getattr(llm_cfg, "base_url", None))
 
         # Azure-compatible mode: if azure_endpoint is configured, use Azure
         # client even when provider is "openai" (matches project convention).
-        use_azure_llm = (
-            provider == "azure"
-            or (provider == "openai" and llm_azure_endpoint)
-        )
+        use_azure_llm = provider == "azure" or (provider == "openai" and llm_azure_endpoint)
 
         if use_azure_llm:
             llm_client = AsyncAzureOpenAI(
@@ -227,25 +240,40 @@ class RagasEvaluator(BaseEvaluator):
                 api_version=getattr(llm_cfg, "api_version", None) or "2024-02-15-preview",
             )
         elif provider == "openai":
-            llm_client = AsyncOpenAI(api_key=llm_cfg.api_key)
+            llm_client = AsyncOpenAI(
+                api_key=llm_cfg.api_key,
+                base_url=llm_base_url,
+            )
         else:
             raise ValueError(
-                f"Unsupported LLM provider for Ragas: '{provider}'. "
-                "Supported: azure, openai"
+                f"Unsupported LLM provider for Ragas: '{provider}'. Supported: azure, openai"
             )
 
-        llm = llm_factory(llm_cfg.model, client=llm_client, max_tokens=8192)
+        if provider == "openai" and llm_base_url:
+            # LM Studio and some OpenAI-compatible local runtimes reject the
+            # default JSON mode used by ragas/instructor, but accept JSON schema.
+            patched_client = instructor.from_openai(
+                llm_client,
+                mode=instructor.Mode.JSON_SCHEMA,
+            )
+            llm = InstructorLLM(
+                client=patched_client,
+                model=llm_cfg.model,
+                provider="openai",
+                max_tokens=max(getattr(llm_cfg, "max_tokens", 4096), 4096),
+                temperature=getattr(llm_cfg, "temperature", 0.0),
+            )
+        else:
+            llm = llm_factory(llm_cfg.model, client=llm_client, max_tokens=8192)
 
         # ── Embeddings ──
         emb_cfg = self.settings.embedding
         emb_provider = emb_cfg.provider.lower()
-        emb_azure_endpoint = getattr(emb_cfg, "azure_endpoint", None)
+        emb_azure_endpoint = _optional_str(getattr(emb_cfg, "azure_endpoint", None))
+        emb_base_url = _optional_str(getattr(emb_cfg, "base_url", None))
 
         # Same Azure-compatible mode detection for embeddings
-        use_azure_emb = (
-            emb_provider == "azure"
-            or (emb_provider == "openai" and emb_azure_endpoint)
-        )
+        use_azure_emb = emb_provider == "azure" or (emb_provider == "openai" and emb_azure_endpoint)
 
         if use_azure_emb:
             emb_client = AsyncAzureOpenAI(
@@ -254,7 +282,10 @@ class RagasEvaluator(BaseEvaluator):
                 api_version=getattr(emb_cfg, "api_version", None) or "2024-02-15-preview",
             )
         elif emb_provider == "openai":
-            emb_client = AsyncOpenAI(api_key=emb_cfg.api_key)
+            emb_client = AsyncOpenAI(
+                api_key=emb_cfg.api_key,
+                base_url=emb_base_url,
+            )
         else:
             raise ValueError(
                 f"Unsupported embedding provider for Ragas: '{emb_provider}'. "
@@ -265,7 +296,7 @@ class RagasEvaluator(BaseEvaluator):
 
         return llm, embeddings
 
-    def _extract_texts(self, chunks: List[Any]) -> List[str]:
+    def _extract_texts(self, chunks: list[Any]) -> list[str]:
         """Extract text strings from various chunk representations.
 
         Args:
@@ -274,7 +305,7 @@ class RagasEvaluator(BaseEvaluator):
         Returns:
             List of text strings.
         """
-        texts: List[str] = []
+        texts: list[str] = []
         for chunk in chunks:
             if isinstance(chunk, str):
                 texts.append(chunk)
@@ -287,7 +318,7 @@ class RagasEvaluator(BaseEvaluator):
                 texts.append(str(chunk))
         return texts
 
-    def _metrics_from_settings(self, settings: Any) -> List[str]:
+    def _metrics_from_settings(self, settings: Any) -> list[str]:
         """Extract metrics list from settings if available."""
         if settings is None:
             return []

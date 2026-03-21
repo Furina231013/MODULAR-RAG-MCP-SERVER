@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.core.types import RetrievalResult
 from src.libs.evaluator.base_evaluator import NoneEvaluator
 from src.libs.evaluator.custom_evaluator import CustomEvaluator
 from src.libs.evaluator.evaluator_factory import EvaluatorFactory
@@ -44,6 +45,18 @@ class TestCustomEvaluator:
 
         with pytest.raises(ValueError, match="retrieved_chunks cannot be empty"):
             evaluator.evaluate("query", [], ground_truth=["x"])
+
+    def test_supports_retrieval_result_chunk_id(self) -> None:
+        evaluator = CustomEvaluator(metrics=["hit_rate", "mrr"])
+        retrieved = [
+            RetrievalResult(chunk_id="c1", text="first", score=0.9),
+            RetrievalResult(chunk_id="c2", text="second", score=0.8),
+        ]
+
+        metrics = evaluator.evaluate("query", retrieved, ground_truth=["c2"])
+
+        assert metrics["hit_rate"] == 1.0
+        assert metrics["mrr"] == 0.5
 
     def test_unsupported_metric_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported custom metrics"):

@@ -13,8 +13,7 @@ and deterministic.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, PropertyMock
-from typing import Any, Dict
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -143,7 +142,7 @@ class TestRagasEvaluatorTextExtraction:
 class TestRagasEvaluatorEvaluate:
     """Tests for evaluate() with mocked Ragas backend."""
 
-    def _make_mock_ragas_result(self, scores: Dict[str, float]) -> MagicMock:
+    def _make_mock_ragas_result(self, scores: dict[str, float]) -> MagicMock:
         """Create a mock ragas evaluation result."""
         import pandas as pd
 
@@ -215,6 +214,54 @@ class TestRagasEvaluatorEvaluate:
         )
 
         assert "faithfulness" in result
+
+
+class TestRagasEvaluatorWrappers:
+    """Tests for wrapper construction against OpenAI-compatible local endpoints."""
+
+    def test_build_wrappers_uses_json_schema_mode_for_local_openai(self) -> None:
+        from instructor import Mode
+
+        from src.observability.evaluation.ragas_evaluator import RagasEvaluator
+
+        settings = MagicMock()
+        settings.llm.provider = "openai"
+        settings.llm.model = "qwen/qwen3-vl-8b"
+        settings.llm.api_key = "lm-studio"
+        settings.llm.base_url = "http://127.0.0.1:1234/v1"
+        settings.llm.azure_endpoint = None
+        settings.llm.max_tokens = 4096
+        settings.llm.temperature = 0.0
+        settings.embedding.provider = "openai"
+        settings.embedding.model = "text-embedding-nomic-embed-text-v1.5"
+        settings.embedding.api_key = "lm-studio"
+        settings.embedding.base_url = "http://127.0.0.1:1234/v1"
+        settings.embedding.azure_endpoint = None
+
+        evaluator = RagasEvaluator(settings=settings, metrics=["faithfulness"])
+
+        with (
+            patch("openai.AsyncOpenAI") as mock_async_openai,
+            patch("instructor.from_openai") as mock_from_openai,
+            patch("ragas.llms.base.InstructorLLM") as mock_instructor_llm,
+            patch("ragas.embeddings.OpenAIEmbeddings") as mock_embeddings,
+            patch("ragas.llms.llm_factory") as mock_llm_factory,
+        ):
+            mock_async_openai.return_value = MagicMock(name="async_openai_client")
+            mock_from_openai.return_value = MagicMock(name="patched_client")
+            mock_instructor_llm.return_value = MagicMock(name="ragas_llm")
+            mock_embeddings.return_value = MagicMock(name="ragas_embeddings")
+
+            llm, embeddings = evaluator._build_wrappers()
+
+        mock_from_openai.assert_called_once_with(
+            mock_async_openai.return_value,
+            mode=Mode.JSON_SCHEMA,
+        )
+        mock_instructor_llm.assert_called_once()
+        mock_llm_factory.assert_not_called()
+        assert llm is mock_instructor_llm.return_value
+        assert embeddings is mock_embeddings.return_value
 
 
 class TestRagasEvaluatorFactory:

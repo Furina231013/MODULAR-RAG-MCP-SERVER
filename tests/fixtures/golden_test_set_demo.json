@@ -1,0 +1,43 @@
+{
+  "description": "Formal evaluation baseline aligned to demo.pdf. Covers retrieval hit quality and answer quality for the local ask flow.",
+  "version": "1.0",
+  "dataset_name": "demo_pdf_baseline",
+  "test_cases": [
+    {
+      "query": "demo.pdf 的主要目的是什么？",
+      "expected_chunk_ids": ["e5fff65b_0000_8d5aca06"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "demo.pdf 的主要目的是提供一份足够长、足够稳定、又容易理解的本地样本文档，帮助学习本地 Agent 和 RAG，并围绕骨架、职责划分、数据流和调试方法展开。"
+    },
+    {
+      "query": "为什么要保留 overlap？",
+      "expected_chunk_ids": ["e5fff65b_0001_575a5b96"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "保留适度 overlap 是为了避免关键信息跨 chunk 边界时丢失上下文。例如某个概念出现在一个 chunk 末尾，而解释它的句子在下一个 chunk 开头，没有 overlap 就可能导致检索召回不完整。"
+    },
+    {
+      "query": "为什么先保存到 JSON 而不是数据库？",
+      "expected_chunk_ids": ["e5fff65b_0001_575a5b96"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "因为 JSON 肉眼可读、调试成本低，适合直接在 Finder、终端或编辑器中查看 ingest 产物，帮助学习者理解 source、chunk_id、text 等字段和整个处理流程。"
+    },
+    {
+      "query": "真正的 RAG 系统最自然的变化发生在哪一层？",
+      "expected_chunk_ids": ["e5fff65b_0002_fcb1bdce"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "最自然的变化通常发生在 search 之后。系统会先从关键词 search 逐步演进到 embedding 检索、向量数据库、ask 接口，再到接模型和多步 Agent。"
+    },
+    {
+      "query": "阅读代码时建议先从哪里入手？",
+      "expected_chunk_ids": ["e5fff65b_0003_632b2da8"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "建议先从 main.py 入手，确认 FastAPI app 的创建和 router 挂载方式；然后再看 ingest.py，以及 loader、chunker、storage 等链路。"
+    },
+    {
+      "query": "FastAPI 入口文件应该具备什么特点？",
+      "expected_chunk_ids": ["e5fff65b_0000_8d5aca06"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "FastAPI 入口文件应该尽量薄，路由层只处理 HTTP 参数和错误码，真正的文档读取、chunk 生成、存储和 search 逻辑应放在 service 层。"
+    }
+  ]
+}

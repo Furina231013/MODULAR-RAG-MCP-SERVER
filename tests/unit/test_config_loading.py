@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -45,6 +45,9 @@ def test_load_settings_success(tmp_path: Path) -> None:
       metrics:
         - hit_rate
         - mrr
+      backends:
+        - custom
+        - ragas
     observability:
       log_level: INFO
       trace_enabled: true
@@ -67,6 +70,7 @@ def test_load_settings_success(tmp_path: Path) -> None:
     assert settings.retrieval.rrf_k == 60
     assert settings.rerank.provider == "none"
     assert settings.evaluation.metrics == ["hit_rate", "mrr"]
+    assert settings.evaluation.backends == ["custom", "ragas"]
     assert settings.observability.log_level == "INFO"
     assert settings.ingestion is not None
 

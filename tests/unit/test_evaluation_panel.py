@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 class TestEvaluationPanelHelpers:
@@ -100,4 +94,4 @@ class TestEvaluationPanelImport:
             DEFAULT_GOLDEN_SET,
         )
 
-        assert DEFAULT_GOLDEN_SET == Path("tests/fixtures/golden_test_set.json")
+        assert DEFAULT_GOLDEN_SET == Path("tests/fixtures/golden_test_set_demo.json")

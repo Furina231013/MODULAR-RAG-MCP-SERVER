@@ -13,7 +13,9 @@ Design Principles:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from dataclasses import is_dataclass, replace
+from typing import Any
 
 from src.libs.evaluator.base_evaluator import BaseEvaluator
 
@@ -45,7 +47,7 @@ class CompositeEvaluator(BaseEvaluator):
 
     def __init__(
         self,
-        evaluators: Optional[Sequence[BaseEvaluator]] = None,
+        evaluators: Sequence[BaseEvaluator] | None = None,
         settings: Any = None,
         **kwargs: Any,
     ) -> None:
@@ -64,7 +66,7 @@ class CompositeEvaluator(BaseEvaluator):
         self.kwargs = kwargs
 
         if evaluators is not None:
-            self._evaluators: List[BaseEvaluator] = list(evaluators)
+            self._evaluators: list[BaseEvaluator] = list(evaluators)
         else:
             self._evaluators = self._build_from_settings(settings, **kwargs)
 
@@ -82,19 +84,19 @@ class CompositeEvaluator(BaseEvaluator):
         )
 
     @property
-    def evaluators(self) -> List[BaseEvaluator]:
+    def evaluators(self) -> list[BaseEvaluator]:
         """Return the list of composed evaluators."""
         return list(self._evaluators)
 
     def evaluate(
         self,
         query: str,
-        retrieved_chunks: List[Any],
-        generated_answer: Optional[str] = None,
-        ground_truth: Optional[Any] = None,
-        trace: Optional[Any] = None,
+        retrieved_chunks: list[Any],
+        generated_answer: str | None = None,
+        ground_truth: Any | None = None,
+        trace: Any | None = None,
         **kwargs: Any,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Run all sub-evaluators and merge their metrics.
 
         Args:
@@ -114,8 +116,8 @@ class CompositeEvaluator(BaseEvaluator):
         self.validate_query(query)
         self.validate_retrieved_chunks(retrieved_chunks)
 
-        merged: Dict[str, float] = {}
-        errors: List[str] = []
+        merged: dict[str, float] = {}
+        errors: list[str] = []
 
         for evaluator in self._evaluators:
             name = type(evaluator).__name__
@@ -151,19 +153,34 @@ class CompositeEvaluator(BaseEvaluator):
                 errors.append(msg)
 
         if not merged and errors:
-            raise RuntimeError(
-                "All sub-evaluators failed:\n" + "\n".join(errors)
-            )
+            raise RuntimeError("All sub-evaluators failed:\n" + "\n".join(errors))
 
         return merged
 
     # ── config-driven builder ────────────────────────────────────
 
     @staticmethod
+    def _filter_metrics_for_backend(backend_name: str, metrics: Sequence[str]) -> list[str]:
+        """Keep only the metrics supported by a given backend."""
+        normalized = [str(metric).strip().lower() for metric in metrics]
+
+        if backend_name == "custom":
+            from src.libs.evaluator.custom_evaluator import CustomEvaluator
+
+            return [metric for metric in normalized if metric in CustomEvaluator.SUPPORTED_METRICS]
+
+        if backend_name == "ragas":
+            from src.observability.evaluation.ragas_evaluator import SUPPORTED_METRICS
+
+            return [metric for metric in normalized if metric in SUPPORTED_METRICS]
+
+        return normalized
+
+    @staticmethod
     def _build_from_settings(
         settings: Any,
         **kwargs: Any,
-    ) -> List[BaseEvaluator]:
+    ) -> list[BaseEvaluator]:
         """Build sub-evaluators from settings.evaluation.backends.
 
         Expected config::
@@ -199,23 +216,38 @@ class CompositeEvaluator(BaseEvaluator):
 
         from src.libs.evaluator.evaluator_factory import EvaluatorFactory
 
-        evaluators: List[BaseEvaluator] = []
+        evaluators: list[BaseEvaluator] = []
         for backend_name in backends:
             backend_name = str(backend_name).strip().lower()
             if backend_name in {"composite", "none", "disabled"}:
                 continue  # avoid infinite recursion / no-ops
 
             try:
-                # Create a mock settings with provider overridden
-                from unittest.mock import MagicMock
+                filtered_metrics = CompositeEvaluator._filter_metrics_for_backend(
+                    backend_name,
+                    getattr(evaluation, "metrics", []),
+                )
 
-                sub_settings = MagicMock(wraps=settings)
-                sub_eval = MagicMock()
-                sub_eval.enabled = True
-                sub_eval.provider = backend_name
-                sub_eval.metrics = getattr(evaluation, "metrics", [])
-                sub_eval.backends = []  # prevent recursion
-                sub_settings.evaluation = sub_eval
+                if is_dataclass(settings) and is_dataclass(evaluation):
+                    sub_eval = replace(
+                        evaluation,
+                        enabled=True,
+                        provider=backend_name,
+                        metrics=filtered_metrics,
+                        backends=[],
+                    )
+                    sub_settings = replace(settings, evaluation=sub_eval)
+                else:
+                    # Fallback path for tests or non-dataclass settings objects.
+                    from unittest.mock import MagicMock
+
+                    sub_settings = MagicMock(wraps=settings)
+                    sub_eval = MagicMock()
+                    sub_eval.enabled = True
+                    sub_eval.provider = backend_name
+                    sub_eval.metrics = filtered_metrics
+                    sub_eval.backends = []
+                    sub_settings.evaluation = sub_eval
 
                 evaluator = EvaluatorFactory.create(sub_settings, **kwargs)
                 evaluators.append(evaluator)

@@ -32,6 +32,7 @@ from pathlib import Path
 # Set UTF-8 encoding for Windows console
 if sys.platform == "win32":
     import io
+
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
@@ -42,13 +43,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Run RAG evaluation against a golden test set."
-    )
+    parser = argparse.ArgumentParser(description="Run RAG evaluation against a golden test set.")
     parser.add_argument(
         "--test-set",
-        default="tests/fixtures/golden_test_set.json",
-        help="Path to golden test set JSON file (default: tests/fixtures/golden_test_set.json)",
+        default="tests/fixtures/golden_test_set_demo.json",
+        help="Path to golden test set JSON file (default: tests/fixtures/golden_test_set_demo.json)",
     )
     parser.add_argument(
         "--collection",
@@ -71,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip retrieval (evaluate with mock chunks for testing).",
     )
+    parser.add_argument(
+        "--config",
+        default="config/settings.eval_fast.yaml",
+        help="Path to settings YAML file (default: config/settings.eval_fast.yaml).",
+    )
     return parser.parse_args()
 
 
@@ -79,11 +83,13 @@ def main() -> int:
     args = parse_args()
 
     try:
+        from src.core.answer import AskService
+        from src.core.query_engine.runtime import create_query_runtime
         from src.core.settings import load_settings
         from src.libs.evaluator.evaluator_factory import EvaluatorFactory
         from src.observability.evaluation.eval_runner import EvalRunner
 
-        settings = load_settings()
+        settings = load_settings(args.config)
     except Exception as exc:
         print(f"❌ Configuration error: {exc}", file=sys.stderr)
         return 2
@@ -98,51 +104,29 @@ def main() -> int:
 
     # Create HybridSearch (unless --no-search)
     hybrid_search = None
+    reranker = None
     if not args.no_search:
         try:
-            from src.core.query_engine.query_processor import QueryProcessor
-            from src.core.query_engine.hybrid_search import create_hybrid_search
-            from src.core.query_engine.dense_retriever import create_dense_retriever
-            from src.core.query_engine.sparse_retriever import create_sparse_retriever
-            from src.ingestion.storage.bm25_indexer import BM25Indexer
-            from src.libs.embedding.embedding_factory import EmbeddingFactory
-            from src.libs.vector_store.vector_store_factory import VectorStoreFactory
-
             collection = args.collection or "default"
-
-            vector_store = VectorStoreFactory.create(
-                settings, collection_name=collection,
-            )
-            embedding_client = EmbeddingFactory.create(settings)
-            dense_retriever = create_dense_retriever(
-                settings=settings,
-                embedding_client=embedding_client,
-                vector_store=vector_store,
-            )
-            bm25_indexer = BM25Indexer(index_dir=f"data/db/bm25/{collection}")
-            sparse_retriever = create_sparse_retriever(
-                settings=settings,
-                bm25_indexer=bm25_indexer,
-                vector_store=vector_store,
-            )
-            sparse_retriever.default_collection = collection
-
-            query_processor = QueryProcessor()
-            hybrid_search = create_hybrid_search(
-                settings=settings,
-                query_processor=query_processor,
-                dense_retriever=dense_retriever,
-                sparse_retriever=sparse_retriever,
-            )
+            runtime = create_query_runtime(settings, collection=collection)
+            hybrid_search = runtime.hybrid_search
+            reranker = runtime.reranker
             print(f"✅ HybridSearch initialized for collection: {collection}")
         except Exception as exc:
             print(f"⚠️  Failed to initialize search (running without retrieval): {exc}")
 
     # Create and run EvalRunner
+    answer_generator = None
+    if evaluator_name in {"RagasEvaluator", "CompositeEvaluator"}:
+        ask_service = AskService(settings=settings)
+        answer_generator = ask_service.generate_answer
+
     runner = EvalRunner(
         settings=settings,
         hybrid_search=hybrid_search,
         evaluator=evaluator,
+        answer_generator=answer_generator,
+        reranker=reranker,
     )
 
     try:

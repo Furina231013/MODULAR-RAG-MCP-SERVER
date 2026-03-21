@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,12 +17,12 @@ class FakeEvaluatorA(BaseEvaluator):
     def evaluate(
         self,
         query: str,
-        retrieved_chunks: List[Any],
-        generated_answer: Optional[str] = None,
-        ground_truth: Optional[Any] = None,
-        trace: Optional[Any] = None,
+        retrieved_chunks: list[Any],
+        generated_answer: str | None = None,
+        ground_truth: Any | None = None,
+        trace: Any | None = None,
         **kwargs: Any,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         return {"hit_rate": 1.0, "mrr": 0.5}
 
 
@@ -32,12 +32,12 @@ class FakeEvaluatorB(BaseEvaluator):
     def evaluate(
         self,
         query: str,
-        retrieved_chunks: List[Any],
-        generated_answer: Optional[str] = None,
-        ground_truth: Optional[Any] = None,
-        trace: Optional[Any] = None,
+        retrieved_chunks: list[Any],
+        generated_answer: str | None = None,
+        ground_truth: Any | None = None,
+        trace: Any | None = None,
         **kwargs: Any,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         return {"faithfulness": 0.92, "answer_relevancy": 0.88}
 
 
@@ -47,12 +47,12 @@ class FailingEvaluator(BaseEvaluator):
     def evaluate(
         self,
         query: str,
-        retrieved_chunks: List[Any],
-        generated_answer: Optional[str] = None,
-        ground_truth: Optional[Any] = None,
-        trace: Optional[Any] = None,
+        retrieved_chunks: list[Any],
+        generated_answer: str | None = None,
+        ground_truth: Any | None = None,
+        trace: Any | None = None,
         **kwargs: Any,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         raise RuntimeError("I always fail")
 
 
@@ -93,9 +93,7 @@ class TestCompositeEvaluatorEvaluate:
         }
 
     def test_partial_failure_returns_successful_metrics(self) -> None:
-        composite = CompositeEvaluator(
-            evaluators=[FakeEvaluatorA(), FailingEvaluator()]
-        )
+        composite = CompositeEvaluator(evaluators=[FakeEvaluatorA(), FailingEvaluator()])
 
         metrics = composite.evaluate(
             query="test",
@@ -118,9 +116,7 @@ class TestCompositeEvaluatorEvaluate:
             def evaluate(self, query, retrieved_chunks, **kwargs):
                 return {"hit_rate": 0.99}
 
-        composite = CompositeEvaluator(
-            evaluators=[FakeEvaluatorA(), EvalOverride()]
-        )
+        composite = CompositeEvaluator(evaluators=[FakeEvaluatorA(), EvalOverride()])
 
         metrics = composite.evaluate(query="test", retrieved_chunks=[{"id": "c1"}])
 
@@ -171,3 +167,24 @@ class TestCompositeEvaluatorFactory:
             ground_truth=["c1"],
         )
         assert "hit_rate" in metrics
+
+    def test_config_driven_filters_metrics_per_backend(self) -> None:
+        settings = MagicMock()
+        settings.evaluation.enabled = True
+        settings.evaluation.provider = "composite"
+        settings.evaluation.metrics = [
+            "hit_rate",
+            "mrr",
+            "faithfulness",
+            "answer_relevancy",
+        ]
+        settings.evaluation.backends = ["custom"]
+
+        composite = CompositeEvaluator(settings=settings)
+        metrics = composite.evaluate(
+            query="test",
+            retrieved_chunks=[{"id": "c1"}],
+            ground_truth=["c1"],
+        )
+
+        assert metrics == {"hit_rate": 1.0, "mrr": 1.0}
