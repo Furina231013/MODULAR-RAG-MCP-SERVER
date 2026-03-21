@@ -132,7 +132,12 @@ class OpenAIVisionLLM(BaseVisionLLM):
             if not self.api_version:
                 self.api_version = "2024-02-15-preview"
         else:
-            self.base_url = self.DEFAULT_BASE_URL
+            settings_base_url = None
+            if vision_settings:
+                settings_base_url = getattr(vision_settings, "base_url", None)
+            if not settings_base_url:
+                settings_base_url = getattr(settings.llm, "base_url", None)
+            self.base_url = settings_base_url if settings_base_url else self.DEFAULT_BASE_URL
         
         self._extra_config = kwargs
     
