@@ -16,6 +16,9 @@ Usage:
     # JSON output
     python scripts/evaluate.py --json
 
+    # Save evaluation report to disk
+    python scripts/evaluate.py --out logs/eval_runs/latest.json
+
 Exit codes:
     0 - Success
     1 - Evaluation failure
@@ -74,6 +77,11 @@ def parse_args() -> argparse.Namespace:
         "--config",
         default="config/settings.eval_fast.yaml",
         help="Path to settings YAML file (default: config/settings.eval_fast.yaml).",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Optional path to save the evaluation report as JSON.",
     )
     return parser.parse_args()
 
@@ -143,9 +151,24 @@ def main() -> int:
         print(f"❌ Evaluation failed: {exc}", file=sys.stderr)
         return 1
 
+    report_dict = report.to_dict()
+
+    if args.out:
+        try:
+            out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                json.dumps(report_dict, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            print(f"💾 Evaluation report saved to: {out_path}")
+        except Exception as exc:
+            print(f"❌ Failed to save evaluation report: {exc}", file=sys.stderr)
+            return 1
+
     # Output results
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+        print(json.dumps(report_dict, indent=2, ensure_ascii=False))
     else:
         _print_report(report)
 

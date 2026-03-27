@@ -228,14 +228,14 @@ class TestRagasEvaluatorWrappers:
         settings.llm.provider = "openai"
         settings.llm.model = "qwen/qwen3-vl-8b"
         settings.llm.api_key = "lm-studio"
-        settings.llm.base_url = "http://127.0.0.1:1234/v1"
+        settings.llm.base_url = "http://192.168.2.172:1234/v1"
         settings.llm.azure_endpoint = None
         settings.llm.max_tokens = 4096
         settings.llm.temperature = 0.0
         settings.embedding.provider = "openai"
         settings.embedding.model = "text-embedding-nomic-embed-text-v1.5"
         settings.embedding.api_key = "lm-studio"
-        settings.embedding.base_url = "http://127.0.0.1:1234/v1"
+        settings.embedding.base_url = "http://192.168.2.172:1234/v1"
         settings.embedding.azure_endpoint = None
 
         evaluator = RagasEvaluator(settings=settings, metrics=["faithfulness"])

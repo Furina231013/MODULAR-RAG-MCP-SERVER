@@ -1,0 +1,67 @@
+{
+  "description": "Golden test set aligned to the regenerated complex demo.pdf. Focuses on private terminology, retrieval rules, and multi-hop internal conventions for deep RAG evaluation.",
+  "version": "2.0",
+  "dataset_name": "demo_pdf_private_rules_v2",
+  "test_cases": [
+    {
+      "query": "为什么这份样本文档要刻意写得像真实团队内部资料？",
+      "expected_chunk_ids": ["e5fff65b_0000_f90b7db9"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "因为公开博客类语料容易让通用模型不检索也能凭常识作答，无法区分回答究竟来自真实命中还是模型记忆。这份文档通过引入私有命名、流程、异常口径和内部约定，降低模型靠预训练常识蒙对的概率，从而更适合测试本地 RAG 的召回、引用和抗幻觉能力。"
+    },
+    {
+      "query": "霜桥索引目录为什么只能由 rebuild_index 全量生成，而不能由 ask 接口惰性写入？",
+      "expected_chunk_ids": ["e5fff65b_0004_0dee2681", "e5fff65b_0010_ba212b2f", "e5fff65b_0012_7090697a"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "因为霜桥索引目录被定义为正式索引目录，只允许由 rebuild_index 全量生成，禁止 ask 接口惰性写入。这是文档故意设置的内部规则，用来保持索引状态可控，并作为私有知识测试点。"
+    },
+    {
+      "query": "文档规定，匹配到蓝门校验失败的 chunk 默认会得到多少 section_boost？",
+      "expected_chunk_ids": ["e5fff65b_0005_1f6f24c9", "e5fff65b_0010_ba212b2f", "e5fff65b_0012_7090697a"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "凡是命中“蓝门校验失败”的 chunk，section_boost 默认加 2。这是一条合成的内部排序规则，用于测试本地 RAG 对规则型检索的可靠性。"
+    },
+    {
+      "query": "为什么说 ask 接口的核心职责不是聊天，而是证据组装？",
+      "expected_chunk_ids": ["e5fff65b_0006_32f7c4d7", "e5fff65b_0007_856b70ee"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "因为 ask 的核心工作是接收问题、调用 search、筛掉噪音 chunk、拼装引用、控制上下文长度、写出提示词边界，并在必要时暴露来源片段。外层是不是聊天框只是 UI 选择，真正关键的是证据如何被组装出来。"
+    },
+    {
+      "query": "单源拥挤和证据拥堵分别在什么情况下记一次？",
+      "expected_chunk_ids": ["e5fff65b_0008_9de1c8b6", "e5fff65b_0012_7090697a"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "当某次 ask 的 top5 结果全部来自同一 source 文件时，记一次“单源拥挤”；当答案引用了 4 个以上 chunk 却没有明确结论句时，记一次“证据拥堵”。这两项是实践导向的合成指标，用来提醒召回过多不等于回答更好。"
+    },
+    {
+      "query": "为什么提前清理 debug-snapshots/gray-tile-archive 会导致定位时间被拉长？",
+      "expected_chunk_ids": ["e5fff65b_0008_9de1c8b6"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "因为灰瓦快照本来用于回滚和对比新旧切块差异，提前删除后，团队无法快速对照新版 chunker 改动前后的索引状态。故障案例里因此难以及时发现预热表与真实索引错位，导致定位时间被拉长。"
+    },
+    {
+      "query": "部署到非交互式主机时，为什么 safe_snapshot_dir 必须和 index_dir 放在不同挂载点？",
+      "expected_chunk_ids": ["e5fff65b_0009_c4f8b05a"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "因为文档规定在非交互式主机上，safe_snapshot_dir 必须和 index_dir 分开挂载，否则一旦索引目录被误清理，快照也会一起丢失。这样做是为了在迁移和运维场景中保住安全快照。"
+    },
+    {
+      "query": "七号通道回填和重新 ingest 的边界是什么？",
+      "expected_chunk_ids": ["e5fff65b_0010_ba212b2f", "e5fff65b_0011_6fbb4352", "e5fff65b_0012_7090697a"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "七号通道回填只用于补写 metadata，不负责正文重切块；如果正文发生变化，必须重新 ingest。也就是说，它适合轻量回填，不适合替代正式的正文重建流程。"
+    },
+    {
+      "query": "静夜写入窗的默认时间范围是什么？",
+      "expected_chunk_ids": ["e5fff65b_0010_ba212b2f", "e5fff65b_0012_7090697a"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "静夜写入窗默认从 23:40 开始，到次日 01:10 结束；除非 receipt 中标记 emergency_patch=true，否则白天不得手动改动灰瓦快照。"
+    },
+    {
+      "query": "如果只命中“表格说明”而正文未命中 query，为什么搜索结果不能进入 top 3？",
+      "expected_chunk_ids": ["e5fff65b_0005_1f6f24c9", "e5fff65b_0010_ba212b2f"],
+      "expected_sources": ["demo.pdf"],
+      "reference_answer": "因为文档规定只命中“表格说明”而正文未命中 query 的 chunk，不进入 top 3。这是一条合成的内部排序口径，目的是测试系统是否真的命中关键正文，而不是被弱证据误导。"
+    }
+  ]
+}

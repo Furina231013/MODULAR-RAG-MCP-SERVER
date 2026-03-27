@@ -10,7 +10,7 @@ llm:
   azure_endpoint:
   api_version:
   api_key: "lm-studio"
-  base_url: "http://127.0.0.1:1234/v1"
+  base_url: "http://192.168.2.172:1234/v1"
   temperature: 0.0
   max_tokens: 4096
 
@@ -22,7 +22,7 @@ embedding:
   deployment_name:
   api_version:
   api_key: "lm-studio"
-  base_url: "http://127.0.0.1:1234/v1"
+  base_url: "http://192.168.2.172:1234/v1"
 
 vision_llm:
   enabled: false
@@ -32,7 +32,7 @@ vision_llm:
   deployment_name:
   api_version:
   api_key: "lm-studio"
-  base_url: "http://127.0.0.1:1234/v1"
+  base_url: "http://192.168.2.172:1234/v1"
   max_image_size: 2048
 
 vector_store:
